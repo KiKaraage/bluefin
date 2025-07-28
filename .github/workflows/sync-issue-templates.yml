@@ -1,0 +1,80 @@
+name: Sync Issue Templates to bluefin-lts
+
+on:
+  push:
+    paths:
+      - '.github/ISSUE_TEMPLATE/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-templates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bluefin repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: bluefin
+
+      - name: Checkout bluefin-lts repository
+        uses: actions/checkout@v4
+        with:
+          repository: ublue-os/bluefin-lts
+          token: ${{ secrets.BLUEFIN_LTS_TOKEN || secrets.GITHUB_TOKEN }}
+          path: bluefin-lts
+
+      - name: Copy issue templates
+        run: |
+          # Create issue template directory if it doesn't exist
+          mkdir -p bluefin-lts/.github/ISSUE_TEMPLATE
+          
+          # Copy all templates except pin.yml (which may need special handling)
+          cp bluefin/.github/ISSUE_TEMPLATE/bug-report.yml bluefin-lts/.github/ISSUE_TEMPLATE/
+          cp bluefin/.github/ISSUE_TEMPLATE/config.yml bluefin-lts/.github/ISSUE_TEMPLATE/
+          cp bluefin/.github/ISSUE_TEMPLATE/feature_request.yml bluefin-lts/.github/ISSUE_TEMPLATE/
+          
+          # Handle pin.yml with adaptations for LTS/CentOS context
+          sed 's/Fedora/CentOS/g' bluefin/.github/ISSUE_TEMPLATE/pin.yml > bluefin-lts/.github/ISSUE_TEMPLATE/pin.yml
+
+      - name: Adapt templates for LTS context
+        run: |
+          cd bluefin-lts/.github/ISSUE_TEMPLATE
+          
+          # Update bug-report.yml to reference bluefin-lts
+          sed -i 's/about using Bluefin/about using Bluefin LTS/g' bug-report.yml
+          
+          # Update config.yml - keep bluefin discussions since bluefin-lts doesn't have discussions enabled
+          # Just update the text to clarify it's for LTS questions
+          sed -i 's/Ask Bluefin/Ask Bluefin (for LTS questions)/g' config.yml
+          sed -i 's/questions about Bluefin/questions about Bluefin LTS/g' config.yml
+          
+          # Update feature_request.yml image options for LTS context
+          # Replace the image options with LTS-specific options
+          sed -i '/- All Images/,/- Vauxite/c\
+        - All LTS Images\
+        - Bluefin LTS Base\
+        - Bluefin LTS DX' feature_request.yml
+
+      - name: Commit and push changes
+        run: |
+          cd bluefin-lts
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add .github/ISSUE_TEMPLATE/
+            git commit -m "Sync issue templates from bluefin repository
+
+            Automatically synced issue templates from ublue-os/bluefin:
+            - bug-report.yml
+            - config.yml  
+            - feature_request.yml
+            - pin.yml (adapted for LTS/CentOS context)
+            "
+            git push
+          fi
