@@ -1,0 +1,95 @@
+name: Sync README to Variant Branches
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "README.md"
+  workflow_dispatch:
+
+jobs:
+  sync-readme:
+    name: Sync README to Variant Branches
+    runs-on: ubuntu-latest
+    if: github.repository == 'ublue-os/bluefin'
+    
+    strategy:
+      matrix:
+        branch: 
+          - yellowfin
+          - albacore
+          - albacore-server
+          - bluefin-tuna
+          - redfin
+    
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+      - name: Check if target branch exists
+        id: check-branch
+        run: |
+          if git ls-remote --heads origin ${{ matrix.branch }} | grep -q ${{ matrix.branch }}; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Branch ${{ matrix.branch }} exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Branch ${{ matrix.branch }} does not exist"
+          fi
+          
+      - name: Create branch if it doesn't exist
+        if: steps.check-branch.outputs.exists == 'false'
+        run: |
+          git checkout -b ${{ matrix.branch }}
+          git push origin ${{ matrix.branch }}
+          echo "Created new branch: ${{ matrix.branch }}"
+          
+      - name: Checkout target branch
+        if: steps.check-branch.outputs.exists == 'true'
+        run: |
+          git fetch origin ${{ matrix.branch }}
+          git checkout ${{ matrix.branch }}
+          
+      - name: Copy README from main
+        run: |
+          git checkout main -- README.md
+          
+      - name: Check for changes
+        id: check-changes
+        run: |
+          if git diff --quiet; then
+            echo "changes=false" >> $GITHUB_OUTPUT
+            echo "No changes to commit"
+          else
+            echo "changes=true" >> $GITHUB_OUTPUT
+            echo "Changes detected"
+          fi
+          
+      - name: Commit and push changes
+        if: steps.check-changes.outputs.changes == 'true'
+        run: |
+          git add README.md
+          git commit -m "docs: sync README from main branch
+          
+          Automatically synced README.md from main branch
+          
+          Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+          git push origin ${{ matrix.branch }}
+          echo "Successfully synced README to ${{ matrix.branch }}"
+          
+      - name: Log sync status
+        run: |
+          if [ "${{ steps.check-changes.outputs.changes }}" == "true" ]; then
+            echo "✅ README synced to ${{ matrix.branch }}"
+          else
+            echo "ℹ️ README already up to date on ${{ matrix.branch }}"
+          fi
