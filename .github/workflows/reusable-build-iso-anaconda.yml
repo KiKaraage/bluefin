@@ -37,34 +37,76 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  matrix-prep:
+    name: Prepare Build Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Determine matrix
+        id: set-matrix
+        run: |
+          set -euo pipefail
+          
+          # Determine which image versions to build
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ "${{ github.event.inputs.image_version }}" == "all" ]]; then
+              IMAGE_VERSIONS='["gts", "stable", "lts", "lts-hwe"]'
+            else
+              IMAGE_VERSIONS='["${{ github.event.inputs.image_version }}"]'
+            fi
+          else
+            # For PRs and other events, only build gts and stable
+            IMAGE_VERSIONS='["gts", "stable"]'
+          fi
+          
+          # Generate matrix combinations
+          MATRIX='{"include":[]}'
+          
+          for image_version in $(echo "$IMAGE_VERSIONS" | jq -r '.[]'); do
+            case "$image_version" in
+              "gts"|"stable")
+                # Standard builds: amd64 only, main and nvidia-open flavors
+                MATRIX=$(echo "$MATRIX" | jq --arg iv "$image_version" \
+                  '.include += [
+                    {"platform": "amd64", "flavor": "main", "image_version": $iv},
+                    {"platform": "amd64", "flavor": "nvidia-open", "image_version": $iv}
+                  ]')
+                ;;
+              "lts")
+                # LTS builds: amd64 + arm64, main/nvidia-open/gdx flavors
+                MATRIX=$(echo "$MATRIX" | jq --arg iv "$image_version" \
+                  '.include += [
+                    {"platform": "amd64", "flavor": "main", "image_version": $iv},
+                    {"platform": "amd64", "flavor": "nvidia-open", "image_version": $iv},
+                    {"platform": "arm64", "flavor": "main", "image_version": $iv},
+                    {"platform": "amd64", "flavor": "gdx", "image_version": $iv},
+                    {"platform": "arm64", "flavor": "gdx", "image_version": $iv}
+                  ]')
+                ;;
+              "lts-hwe")
+                # LTS-HWE builds: amd64 + arm64, main and nvidia-open flavors
+                MATRIX=$(echo "$MATRIX" | jq --arg iv "$image_version" \
+                  '.include += [
+                    {"platform": "amd64", "flavor": "main", "image_version": $iv},
+                    {"platform": "amd64", "flavor": "nvidia-open", "image_version": $iv},
+                    {"platform": "arm64", "flavor": "main", "image_version": $iv}
+                  ]')
+                ;;
+            esac
+          done
+          
+          echo "Generated matrix:"
+          echo "$MATRIX" | jq .
+          echo "matrix=${MATRIX}" >> "${GITHUB_OUTPUT}"
+
   build:
     name: Build ISOs
+    needs: matrix-prep
     runs-on: ${{ matrix.platform == 'amd64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     strategy:
       fail-fast: false
-      matrix:
-        platform: [amd64]
-        flavor: ["main", "nvidia-open"]
-        image_version: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.image_version == 'all' && fromJSON('["gts", "stable", "lts"]') || fromJSON(format('["{0}"]', github.event.inputs.image_version))) || fromJSON('["gts", "stable"]') }}
-        include:
-          - platform: amd64
-            flavor: "main"
-            image_version: lts
-          - platform: arm64
-            flavor: "main"
-            image_version: lts
-          - platform: amd64
-            flavor: gdx
-            image_version: lts
-          - platform: arm64
-            flavor: gdx
-            image_version: lts
-          - platform: amd64
-            flavor: "main"
-            image_version: lts-hwe
-          - platform: arm64
-            flavor: "main"
-            image_version: lts-hwe
+      matrix: ${{ fromJSON(needs.matrix-prep.outputs.matrix) }}
     permissions:
       contents: read
       packages: read
@@ -80,7 +122,7 @@ jobs:
             podman
 
       - name: Maximize build space (remove-software)
-        if: matrix. platform != 'arm64'
+        if: matrix.platform != 'arm64'
         uses: ublue-os/remove-unwanted-software@cc0becac701cf642c8f0a6613bbdaf5dc36b259e # v9
         with:
           remove-codeql: true
